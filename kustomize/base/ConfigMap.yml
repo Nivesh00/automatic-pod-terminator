@@ -1,0 +1,9 @@
+kind: ConfigMap
+metadata:
+  name: custom-config
+data:
+  # Kubeconfig file
+  kubeconfig: |
+    apiVersion: v1
+    kind: Config
+    clusters:
