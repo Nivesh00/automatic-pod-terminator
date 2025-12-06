@@ -1,27 +1,42 @@
 package main
 
 import (
+	"context"
+	"log/slog"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1" // default k8s methods and attrs
+	corev1 "k8s.io/api/core/v1"
+    ctrl "sigs.k8s.io/controller-runtime"  
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"k8s.io/client-go/util/workqueue"
+
 )
 
-// Group Version Kind
-var (
-	Group := 
-)
-
-type AutoPodTerminatorList struct {
-	metav1.TypeMeta			  `json:",inline"`
-	metav1.ListMeta 		  `json:"metadata,omitempty"`
-	Items []AutoPodTerminator `json:"items"`
+type PodTerminatorController struct {
+	client.Client
 }
 
-type AutoPodTerminator struct {
-	metav1.TypeMeta   	   	   `json:",inline"`
-	metav1.ObjectMeta 	   	   `json:"metadata,omitempty"`
-	Spec AutoPodTerminatorSpec `json:"spec"`
+// ##############################################
+// Reconciler
+// ##############################################
+
+func (c *PodTerminatorController) Reconcile (ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+
+	// List pods
+	podList := corev1.PodList{}
+	if err := c.List(ctx, &podList); err != nil {
+		Logger.Info("could not list pods")
+		return ctrl.Result{}, err
+	}
+
+	return ctrl.Result{}, nil
 }
 
-type AutoPodTerminatorSpec struct {
-	metav1.LabelSelector
-	LivePeriod string `json:"liveperiod,omitempty"`
+// ##############################################
+// Event handlers
+// ##############################################
+
+func AddFunction(obj interface{}, queue *workqueue.TypedRateLimitingInterface[string]) {
+	autoPodTerminator := obj.(*PodTerminator)
+	(*queue).AddRateLimited(autoPodTerminator.GetNamespace() + "/" + autoPodTerminator.GetName())
 }
