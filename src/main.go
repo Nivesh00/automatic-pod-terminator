@@ -2,23 +2,23 @@ package main
 
 import (
 	// std packages
+	"context"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/signal"
 	"time"
 
 	// k8s packages
-	"k8s.io/client-go/informers"
-	kubeinformers "k8s.io/client-go/informers" // inform changes about resources
-	"k8s.io/client-go/kubernetes"              // clientset for k8s APIs
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd" // work with kubeconfigfile
 	"k8s.io/client-go/util/workqueue"
-	"sigs.k8s.io/controller-runtime/pkg/manager"         // controller manager
-	"sigs.k8s.io/controller-runtime/pkg/manager/signals" // handle signals for controller
-	corev1 "k8s.io/api/core/v1"
 	// custom made packages
 )
 
@@ -40,10 +40,10 @@ func main() {
 	// Create out-of-cluster kubeconfig
 	config, err := clientcmd.BuildConfigFromFlags(masterURL, kubeconfig)
 	if err != nil {
-		Logger.Warn("error building out-of-cluster kubeconfig", slog.Any("warn", err.Error()))
+		Logger.Warn("failed building out-of-cluster kubeconfig", slog.Any("warn", err.Error()))
 		Logger.Info("falling back to building in-cluster config")
 
-		// Creates in-cluster kubeconfig
+		// Creates in-cluster kubeconfig if previous task failed
 		config, err = rest.InClusterConfig()
 		if err != nil {
 			Logger.Error("error building in-cluster kubeconfig", slog.Any("error", err))
@@ -53,73 +53,68 @@ func main() {
 	Logger.Info("successfully built kubeconfig file")
 
 	// Create Kubernetes client
-	clientset, err := kubernetes.NewForConfig(config)
+	clientset, err := dynamic.NewForConfig(config)
 	if err != nil {
 		Logger.Error("error creating kubernetes client", slog.Any("error", err))
 	}
 	Logger.Info("successfully created kubernetes client")
 
-	// Create SharedinformerFactory (resync every 30 seconds)
-  	informerFactory := informers.NewSharedInformerFactory(clientset,  30*time.Second)
-	// Create informer for for auto pod terminator
-	podTerminatorGenericInformer, err := informerFactory.ForResource(APTGroupVersionResource)
-	if err != nil {
-		Logger.Error("error creating shared informer for auto pod terminator", slog.Any("error", err))
-		os.Exit(1)
-	}
-	podTerminatorInformer := podTerminatorGenericInformer.Informer()
-	// Create informer for pod
-	podInformer:= informerFactory.Core().V1().Pods().Informer()
+	// Create resource GroupVersionResource
+    podTerminatorGVR := schema.GroupVersionResource{Group: "k8s.niv-ram.dev", Version: "v1", Resource: "podterminators"}
 
-	// Set up an indexer for Pods, which allows us to retrieve objects by key
-	// The indexer is used to efficiently look up objects in the workqueue
-	// without needing to fetch them from the API server every time
-	podTerminatorIndexer := podTerminatorInformer.GetIndexer()
-	podIndexer := podInformer.GetIndexer()
-
-	// Create queue for workloads
-	queue := workqueue.NewTypedRateLimitingQueue[string](
+	// Create contoller instance
+	podTerminatorController := PodTerminatorController{}
+	// Create workqueue for controller instance
+	podTerminatorController.workqueue = workqueue.NewTypedRateLimitingQueue(
 		workqueue.DefaultTypedControllerRateLimiter[string](),
 	)
 
-	// Register event handlers
-	podTerminatorInformer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	// Dynamic informers help reduce API calls to Kubernetes API server and boost performance. They watches
+	// for changes in the cluster. Data is stored in a thread-safe local in-memory cache.
+	// Shared informer manages informers' lifecycle centrally and ensures efficient resource utilization.
+
+	// Create dynamic informer for all namespaces with 30 second resync period
+    factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(clientset, 30 * time.Second, corev1.NamespaceAll, nil)
+
+	// Get informer
+	podTerminatorController.informer = factory.ForResource(podTerminatorGVR).Informer()
+	// Get indexer
+	podTerminatorController.indexer  = podTerminatorController.informer.GetIndexer()
+
+	// Add event handler to informer. Parameters passed to function as `interface{}` and it is assumed
+	// that instances are of `*unstructured.Unstructured` (map of k8s object) and can be cast safely
+	podTerminatorController.informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			APTItem := obj.(*PodTerminator)
-			Logger.Info(
-				"deleting pod terminator object",
-				"namespace",
-				APTItem.GetNamespace(),
-				"name",
-				APTItem.GetName(),
-			)
+			podTerminatorController.onAdd(obj)
 		},
-		UpdateFunc: func(_, newObj interface{}) {
-			APTItem := newObj.(*PodTerminator)
-			Logger.Info(
-				"updating pod terminator object",
-				"namespace",
-				APTItem.GetNamespace(),
-				"name",
-				APTItem.GetName(),
-			)
+        UpdateFunc: func(_, obj interface{}) {
+			podTerminatorController.onUpdate(obj)
 		},
-		DeleteFunc: func(obj interface{}) {
-			APTItem := obj.(*PodTerminator)
-			Logger.Info(
-				"deleting pod terminator object",
-				"namespace",
-				APTItem.GetNamespace(),
-				"name",
-				APTItem.GetName(),
-			)
+        DeleteFunc: func(obj interface{}) {
+			podTerminatorController.onDelete(obj)
 		},
 	})
 
-	// Create indexer
-	customIndexer := cache.Indexers{
-		""
+	// `context.Context` is only stopped when an interrupt signal is received. Application will therefore
+	// run indefinitely unless `os.interrupt` is called
+    ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
+    defer cancel()
+
+	// Keep informer running. Run must be called first before cache syncing can start, therefore a
+	// is used to not halt the program
+	go podTerminatorController.informer.Run(ctx.Done())
+
+	// Since informers store data in-memory, all data is lost on reboot. Everytime application starts back up,
+	// the informer needs to sync with the current status of the cluster
+	if !cache.WaitForCacheSync(ctx.Done(), podTerminatorController.informer.HasSynced) {
+		Logger.Error("cannot sync cache for schema " + podTerminatorGVR.String())
+		os.Exit(1)
 	}
+
+	<-ctx.Done()
+
+	Logger.Info("controller shutting down...")
+
 }
 
 // Init flags
