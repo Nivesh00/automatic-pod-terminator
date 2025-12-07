@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 
 	corev1 "k8s.io/api/core/v1"
@@ -148,34 +150,60 @@ func (c *PodTerminatorController) worker(clientset *dynamic.DynamicClient) {
 		Resource: "pods",
 	})
 
-	podListUnstructured, err := client.List(context.Background(), metav1.ListOptions{
-		// LabelSelector: "app=pod-terminator",
-	})
+	podList, err := getAllPods(client)
 	if err != nil {
 		Logger.Error(
-			"controller cannot list pod resources",
+			"failed listing pods",
 			slog.Any("error", err),
 		)
-	}
-	var podList corev1.PodList
-	err = runtime.DefaultUnstructuredConverter.FromUnstructured(
-		podListUnstructured.Object,
-		&podList,
-	)
-	if err != nil {
-		Logger.Error(
-			"controller failed to convert unstructured object to object of type podlist",
-			slog.Any("error", err),
-		)
+		// If key has been requed more than 10 times, forget it
+		if 	c.workqueue.NumRequeues(key) >= 10 {
+			c.workqueue.Forget(key)
+			continue
+		}
+		// Only readd key if error is recoverable
+      	c.workqueue.AddRateLimited(key)
+      	continue
 	}
 
 	Logger.Info(
-		"printing podlist",
-		"podlist",
+		"finished processing pod list",
+		"pod_list",
 		podList,
 	)
 
 	// Finished processing key, all ok
     c.workqueue.Forget(key)
   }
+}
+
+func getAllPods(client dynamic.NamespaceableResourceInterface) (string, error) {
+	
+	// List all pods
+	podListUnstructured, err := client.Namespace(corev1.NamespaceAll).List(context.TODO(), metav1.ListOptions{})
+	if err != nil {
+		Logger.Info("cannot list pod resources")
+		return "", err
+	}
+
+	fmt.Println(podListUnstructured)
+
+	// Convert pod list to typed object
+	var podList corev1.PodList
+	err = runtime.DefaultUnstructuredConverter.FromUnstructured(
+		podListUnstructured.Object,
+		&podList,
+	)
+	if err != nil {
+		Logger.Info("cannot convert unstructured object to object of type podlist")
+		return "", err
+	}
+
+	podListBytes, err := json.Marshal(podList)
+	if err != nil {
+		Logger.Info("cannot marshal pod list")
+		return "", err
+	}
+
+	return string(podListBytes), nil
 }
