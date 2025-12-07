@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"time"
 
 	// k8s packages
 	corev1 "k8s.io/api/core/v1"
@@ -19,7 +18,6 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd" // work with kubeconfigfile
 	"k8s.io/client-go/util/workqueue"
-	// custom made packages
 )
 
 var (
@@ -73,8 +71,8 @@ func main() {
 	// for changes in the cluster. Data is stored in a thread-safe local in-memory cache.
 	// Shared informer manages informers' lifecycle centrally and ensures efficient resource utilization.
 
-	// Create dynamic informer for all namespaces with 30 second resync period
-    factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(clientset, 30 * time.Second, corev1.NamespaceAll, nil)
+	// Create dynamic informer for all namespaces with no resync period
+    factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(clientset, 0, corev1.NamespaceAll, nil)
 
 	// Get informer
 	podTerminatorController.informer = factory.ForResource(podTerminatorGVR).Informer()
@@ -85,13 +83,13 @@ func main() {
 	// that instances are of `*unstructured.Unstructured` (map of k8s object) and can be cast safely
 	podTerminatorController.informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			podTerminatorController.onAdd(obj)
+			podTerminatorController.addToWorkqueue(obj, "create")
 		},
         UpdateFunc: func(_, obj interface{}) {
-			podTerminatorController.onUpdate(obj)
+			podTerminatorController.addToWorkqueue(obj, "update")
 		},
         DeleteFunc: func(obj interface{}) {
-			podTerminatorController.onDelete(obj)
+			podTerminatorController.addToWorkqueue(obj, "delete")
 		},
 	})
 
@@ -101,15 +99,17 @@ func main() {
     defer cancel()
 
 	// Keep informer running. Run must be called first before cache syncing can start, therefore a
-	// is used to not halt the program
-	go podTerminatorController.informer.Run(ctx.Done())
-
+	// is used to not halt the program. Informer therfore starts watching
+	factory.Start(ctx.Done())
 	// Since informers store data in-memory, all data is lost on reboot. Everytime application starts back up,
 	// the informer needs to sync with the current status of the cluster
-	if !cache.WaitForCacheSync(ctx.Done(), podTerminatorController.informer.HasSynced) {
-		Logger.Error("cannot sync cache for schema " + podTerminatorGVR.String())
-		os.Exit(1)
-	}
+	// Starts a goroutine internally
+	factory.WaitForCacheSync(ctx.Done())
+
+	Logger.Info("cache successfully synced")
+	Logger.Info("starting controller worker")
+
+	go podTerminatorController.worker(clientset)
 
 	<-ctx.Done()
 

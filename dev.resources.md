@@ -7,3 +7,4 @@
   - no training wheels: https://medium.com/@dhruvbhl/no-more-training-wheels-writing-a-raw-kubernetes-controller-with-client-go-92160df34792
 - Guidelines: https://github.com/kubernetes/community/blob/master/contributors/devel/sig-api-machinery/controllers.md
 - Informers: https://macias.info/entry/202109081800_k8s_informers.md
+- Workqueue: https://fedepaol.github.io/blog/2021/01/07/writing-a-kubernetes-controller-part-2/

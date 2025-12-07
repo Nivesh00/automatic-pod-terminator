@@ -27,8 +27,8 @@ type PodTerminator struct {
 
 // Custom resource spec PodTerminator
 type PodTerminatorSpec struct {
-	metav1.LabelSelector
-	LivePeriod string `json:"liveperiod,omitempty"`
+	metav1.LabelSelector `json:",inline"`
+	LivePeriod string 	 `json:"liveperiod,omitempty"`
 }
 
 // ##############################################
@@ -67,33 +67,5 @@ func (in *PodTerminatorList) DeepCopyObject() runtime.Object {
 			in.Items[i].DeepCopyInto(&out.Items[i])
 		}
 	}
-
 	return &out
 }
-
-// // ##############################################
-// // Controller logic
-// // ##############################################
-
-// func worker(q workqueue.TypedRateLimitingInterface[string], indexer cache.Indexer) {
-//   for {
-//     key, shutdown := q.Get()
-//     if shutdown {
-//       return
-//     }
-//     defer q.Done(key)
-
-//     obj, exists, err := indexer.GetByKey(key)
-//     if err != nil {
-//       q.AddRateLimited(key)
-//       continue
-//     }
-//     if !exists {
-//       q.Forget(key)
-//       continue
-//     }
-
-//     podTerminator := obj.(*PodTerminator)
-//     q.Forget(key)
-//   }
-// }
