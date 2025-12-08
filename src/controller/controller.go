@@ -52,7 +52,7 @@ func (c *PodTerminatorController) handleError(key string) {
 func (c *PodTerminatorController) Worker(clientset *dynamic.DynamicClient) {
   for {
     key, _ := c.Workqueue.Get()
-
+	
 	// Tell queue we are done working with this key
 	// Only one instance of the key can exist in a work queue, so we need
 	// to call Done so that key can be readded
