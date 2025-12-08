@@ -83,13 +83,13 @@ func main() {
 	// that instances are of `*unstructured.Unstructured` (map of k8s object) and can be cast safely
 	podTerminatorController.informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			podTerminatorController.addToWorkqueue(obj, "create")
+			podTerminatorController.addToWorkqueue(obj, "CREATE")
 		},
         UpdateFunc: func(_, obj interface{}) {
-			podTerminatorController.addToWorkqueue(obj, "update")
+			podTerminatorController.addToWorkqueue(obj, "UPDATE")
 		},
         DeleteFunc: func(obj interface{}) {
-			podTerminatorController.addToWorkqueue(obj, "delete")
+			podTerminatorController.addToWorkqueue(obj, "DELETE")
 		},
 	})
 
@@ -101,6 +101,7 @@ func main() {
 	// Keep informer running. Run must be called first before cache syncing can start, therefore a
 	// is used to not halt the program. Informer therfore starts watching
 	factory.Start(ctx.Done())
+
 	// Since informers store data in-memory, all data is lost on reboot. Everytime application starts back up,
 	// the informer needs to sync with the current status of the cluster
 	// Starts a goroutine internally
@@ -112,6 +113,8 @@ func main() {
 	go podTerminatorController.worker(clientset)
 
 	<-ctx.Done()
+
+	podTerminatorController.workqueue.ShutDown()
 
 	Logger.Info("controller shutting down...")
 
