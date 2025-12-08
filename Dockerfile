@@ -4,7 +4,7 @@ FROM golang:1.24.5 AS build
 WORKDIR /app
 
 # Copy contents src directory
-COPY src/* ./
+COPY src/ ./
 RUN go mod download
 
 # Build

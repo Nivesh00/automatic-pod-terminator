@@ -1,4 +1,4 @@
-package main
+package controller
 
 import (
 	"log/slog"
@@ -6,13 +6,15 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
+
+	toolbox "github.com/Nivesh00/automatic-pod-terminator/src/toolbox"
 )
 
 
 type PodTerminatorController struct {
-	workqueue workqueue.TypedRateLimitingInterface[string]
-	informer  cache.SharedIndexInformer
-	indexer   cache.Indexer
+	Workqueue workqueue.TypedRateLimitingInterface[string]
+	Informer  cache.SharedIndexInformer
+	Indexer   cache.Indexer
 }
 
 // ##############################################
@@ -27,11 +29,11 @@ type PodTerminatorController struct {
 // Internally, it wraps a `map[string]interface{}` and behaves like raw JSON/YAML.
 
 // Queue an event by adding it to the ratelimited workqueue
-func (c *PodTerminatorController) addToWorkqueue(obj interface{}, operation string) {
+func (c *PodTerminatorController) AddToWorkqueue(obj interface{}, operation string) {
 	// Unstructured lets us handle object as maps
 	podTerminator := obj.(*unstructured.Unstructured).DeepCopy()
 
-	Logger.Debug(
+	toolbox.Logger.Debug(
 		"processing pod terminator object for workqueue",
 		"operation",
 		operation,
@@ -53,7 +55,7 @@ func (c *PodTerminatorController) addToWorkqueue(obj interface{}, operation stri
 	}
 
 	if err != nil {
-		Logger.Error(
+		toolbox.Logger.Error(
 			"failed adding pod terminator resource to work queue",
 			"operation",
 			operation,
@@ -66,7 +68,7 @@ func (c *PodTerminatorController) addToWorkqueue(obj interface{}, operation stri
 		return
 	}
 
-	Logger.Debug("adding key to workqueue", "key", key)
+	toolbox.Logger.Debug("adding key to workqueue", "key", key)
 
-	c.workqueue.AddRateLimited(key)
+	c.Workqueue.AddRateLimited(key)
 }

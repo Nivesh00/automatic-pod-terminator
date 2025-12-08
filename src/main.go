@@ -1,7 +1,6 @@
 package main
 
 import (
-	// std packages
 	"context"
 	"flag"
 	"fmt"
@@ -9,15 +8,17 @@ import (
 	"os"
 	"os/signal"
 
-	// k8s packages
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
-	"k8s.io/client-go/tools/clientcmd" // work with kubeconfigfile
+	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/workqueue"
+
+	toolbox "github.com/Nivesh00/automatic-pod-terminator/src/toolbox"
+	controller "github.com/Nivesh00/automatic-pod-terminator/src/controller"
 )
 
 var (
@@ -25,12 +26,11 @@ var (
 	kubeconfig string
 
 	lvl		   string
-	Logger 	   *slog.Logger
 )
 
 func init(){
 	initFlags()
-	initLogger()
+	toolbox.InitLogger(lvl)
 }
 
 func main() {
@@ -38,32 +38,32 @@ func main() {
 	// Create out-of-cluster kubeconfig
 	config, err := clientcmd.BuildConfigFromFlags(masterURL, kubeconfig)
 	if err != nil {
-		Logger.Warn("failed building out-of-cluster kubeconfig", slog.Any("warn", err.Error()))
-		Logger.Info("falling back to building in-cluster config")
+		toolbox.Logger.Warn("failed building out-of-cluster kubeconfig", slog.Any("warn", err.Error()))
+		toolbox.Logger.Info("falling back to building in-cluster config")
 
 		// Creates in-cluster kubeconfig if previous task failed
 		config, err = rest.InClusterConfig()
 		if err != nil {
-			Logger.Error("error building in-cluster kubeconfig", slog.Any("error", err))
+			toolbox.Logger.Error("error building in-cluster kubeconfig", slog.Any("error", err))
 			os.Exit(1)
 		}
 	}
-	Logger.Info("successfully built kubeconfig file")
+	toolbox.Logger.Info("successfully built kubeconfig file")
 
 	// Create Kubernetes client
 	clientset, err := dynamic.NewForConfig(config)
 	if err != nil {
-		Logger.Error("error creating kubernetes client", slog.Any("error", err))
+		toolbox.Logger.Error("error creating kubernetes client", slog.Any("error", err))
 	}
-	Logger.Info("successfully created kubernetes client")
+	toolbox.Logger.Info("successfully created kubernetes client")
 
 	// Create resource GroupVersionResource
     podTerminatorGVR := schema.GroupVersionResource{Group: "k8s.niv-ram.dev", Version: "v1", Resource: "podterminators"}
 
 	// Create contoller instance
-	podTerminatorController := PodTerminatorController{}
+	podTerminatorController := controller.PodTerminatorController{}
 	// Create workqueue for controller instance
-	podTerminatorController.workqueue = workqueue.NewTypedRateLimitingQueue(
+	podTerminatorController.Workqueue = workqueue.NewTypedRateLimitingQueue(
 		workqueue.DefaultTypedControllerRateLimiter[string](),
 	)
 
@@ -75,21 +75,21 @@ func main() {
     factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(clientset, 0, corev1.NamespaceAll, nil)
 
 	// Get informer
-	podTerminatorController.informer = factory.ForResource(podTerminatorGVR).Informer()
+	podTerminatorController.Informer = factory.ForResource(podTerminatorGVR).Informer()
 	// Get indexer
-	podTerminatorController.indexer  = podTerminatorController.informer.GetIndexer()
+	podTerminatorController.Indexer  = podTerminatorController.Informer.GetIndexer()
 
 	// Add event handler to informer. Parameters passed to function as `interface{}` and it is assumed
 	// that instances are of `*unstructured.Unstructured` (map of k8s object) and can be cast safely
-	podTerminatorController.informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+	podTerminatorController.Informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
-			podTerminatorController.addToWorkqueue(obj, "CREATE")
+			podTerminatorController.AddToWorkqueue(obj, "CREATE")
 		},
         UpdateFunc: func(_, obj interface{}) {
-			podTerminatorController.addToWorkqueue(obj, "UPDATE")
+			podTerminatorController.AddToWorkqueue(obj, "UPDATE")
 		},
         DeleteFunc: func(obj interface{}) {
-			podTerminatorController.addToWorkqueue(obj, "DELETE")
+			podTerminatorController.AddToWorkqueue(obj, "DELETE")
 		},
 	})
 
@@ -107,16 +107,16 @@ func main() {
 	// Starts a goroutine internally
 	factory.WaitForCacheSync(ctx.Done())
 
-	Logger.Info("cache successfully synced")
-	Logger.Info("starting controller worker")
+	toolbox.Logger.Info("cache successfully synced")
+	toolbox.Logger.Info("starting controller worker")
 
-	go podTerminatorController.worker(clientset)
+	go podTerminatorController.Worker(clientset)
 
 	<-ctx.Done()
 
-	podTerminatorController.workqueue.ShutDown()
+	podTerminatorController.Workqueue.ShutDown()
 
-	Logger.Info("controller shutting down...")
+	toolbox.Logger.Info("controller shutting down...")
 
 }
 
@@ -129,28 +129,4 @@ func initFlags() {
 
 	flag.Parse()
 	fmt.Println("Finished parsing flags")
-}
-
-// Init logger
-func initLogger() {
-    logLevel := new(slog.LevelVar)
-    // Set log level
-    switch lvl {
-    case "debug":
-        logLevel.Set(slog.LevelDebug)
-    case "info":
-        logLevel.Set(slog.LevelInfo)
-    case "error":
-        logLevel.Set(slog.LevelError)
-    // Default is warn
-    default:
-        logLevel.Set(slog.LevelWarn)
-    }
-
-    // Create logger
-    Logger = slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
-        Level: logLevel,
-    }))
-
-    Logger.Debug("successfully created logger")
 }
